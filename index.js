@@ -13,6 +13,7 @@ function NodePbkdf2 (options) {
   this.iterations = options.iterations || 10000;
   this.saltLength = options.saltLength || 12;
   this.derivedKeyLength = options.derivedKeyLength || 30;
+  this.digest = options.digest || 'sha512';
 }
 
 
@@ -57,50 +58,96 @@ NodePbkdf2.deserializeEncryptedPassword = function (encryptedPassword) {
 
 
 /**
- * Encrypt a password using node.js' crypto's PBKDF2
+ * Encrypt a password using node.js' crypto's PBKDF2 in a promiseful manner
  * Description here: http://en.wikipedia.org/wiki/PBKDF2
  * Number of iterations are saved in case we change the setting in the future
  * @param {String} password
- * @param {Funtion} callback Signature: err, encryptedPassword
  */
-NodePbkdf2.prototype.encryptPassword = function (password, callback) {
-  var self = this
-    , randomSalt = NodePbkdf2.uid(self.saltLength);
+NodePbkdf2.prototype.encryptPassword = function (password) {
+  var self = this;
 
-  crypto.pbkdf2(password, randomSalt, self.iterations, self.derivedKeyLength, function (err, derivedKey) {
-    if (err) { return callback(err); }
+  return new Promise(function(resolve, reject) {
+    var randomSalt = NodePbkdf2.uid(self.saltLength);
 
-    return callback(null, NodePbkdf2.serializeEncryptedPassword({ salt: randomSalt
-                                                                , iterations: self.iterations
-                                                                , derivedKeyLength: self.derivedKeyLength
-                                                                , derivedKey: new Buffer(derivedKey, 'binary').toString('base64') }));
+    crypto.pbkdf2(password, randomSalt, self.iterations, self.derivedKeyLength, self.digest, function (err, derivedKey) {
+      if (err) { return reject(err); }
+
+      var res = NodePbkdf2.serializeEncryptedPassword({ salt: randomSalt
+                                                           , iterations: self.iterations
+                                                           , derivedKeyLength: self.derivedKeyLength
+                                                           , derivedKey: new Buffer(derivedKey, 'binary').toString('base64') });
+      resolve(res);
+    });
   });
 };
 
 
 /**
- * Compare a password to an encrypted password
+ * Encrypt a password using node.js' crypto's PBKDF2 in a synchronous manner
+ * Description here: http://en.wikipedia.org/wiki/PBKDF2
+ * Number of iterations are saved in case we change the setting in the future
+ * @param {String} password
+ */
+NodePbkdf2.prototype.encryptPasswordSync = function (password) {
+  var self = this
+    , randomSalt = NodePbkdf2.uid(self.saltLength);
+
+  var derivedKey = crypto.pbkdf2Sync(password, randomSalt, self.iterations, self.derivedKeyLength, self.digest);
+
+  return NodePbkdf2.serializeEncryptedPassword({ salt: randomSalt
+                                               , iterations: self.iterations
+                                               , derivedKeyLength: self.derivedKeyLength
+                                               , derivedKey: new Buffer(derivedKey, 'binary').toString('base64') });
+};
+
+
+/**
+ * Compare a password to an encrypted password in a promiseful manner
  * @param {String} password
  * @param {String} encryptedPassword
- * @param {Function} callback Signature: err, true/false
  */
-NodePbkdf2.prototype.checkPassword = function (password, encryptedPassword, callback) {
+NodePbkdf2.prototype.checkPassword = function (password, encryptedPassword) {
+  var self = this;
+
+  return new Promise(function(resolve, reject) {
+    encryptedPassword = NodePbkdf2.deserializeEncryptedPassword(encryptedPassword);
+
+    if (!encryptedPassword.salt || !encryptedPassword.derivedKey || !encryptedPassword.iterations || !encryptedPassword.derivedKeyLength) { return reject("encryptedPassword doesn't have the right format"); }
+
+    // Use the encrypted password's parameter to hash the candidate password
+    crypto.pbkdf2(password, encryptedPassword.salt, encryptedPassword.iterations, encryptedPassword.derivedKeyLength, self.digest, function (err, derivedKey) {
+      if (err) { return reject(err); }
+
+      if (new Buffer(derivedKey, 'binary').toString('base64') === encryptedPassword.derivedKey) {
+        return resolve(true);
+      } else {
+        return resolve(false);
+      }
+    });
+  });
+};
+
+
+/**
+ * Compare a password to an encrypted password in a synchronous manner
+ * @param {String} password
+ * @param {String} encryptedPassword
+ */
+NodePbkdf2.prototype.checkPasswordSync = function (password, encryptedPassword) {
   var self = this;
 
   encryptedPassword = NodePbkdf2.deserializeEncryptedPassword(encryptedPassword);
 
-  if (!encryptedPassword.salt || !encryptedPassword.derivedKey || !encryptedPassword.iterations || !encryptedPassword.derivedKeyLength) { return callback("encryptedPassword doesn't have the right format"); }
+  if (!encryptedPassword.salt || !encryptedPassword.derivedKey || !encryptedPassword.iterations || !encryptedPassword.derivedKeyLength) { throw new TypeError("encryptedPassword doesn't have the right format"); }
 
   // Use the encrypted password's parameter to hash the candidate password
-  crypto.pbkdf2(password, encryptedPassword.salt, encryptedPassword.iterations, encryptedPassword.derivedKeyLength, function (err, derivedKey) {
-    if (err) { return callback(err); }
+  derivedKey = crypto.pbkdf2Sync(password, encryptedPassword.salt, encryptedPassword.iterations, encryptedPassword.derivedKeyLength, self.digest);
 
-    if (new Buffer(derivedKey, 'binary').toString('base64') === encryptedPassword.derivedKey) {
-      return callback(null, true);
-    } else {
-      return callback(null, false);
-    }
-  });
+  if (new Buffer(derivedKey, 'binary').toString('base64') === encryptedPassword.derivedKey) {
+    return true;
+  } else {
+    return false;
+  }
 };
 
 
